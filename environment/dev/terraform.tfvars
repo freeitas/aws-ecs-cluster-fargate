@@ -1,4 +1,4 @@
-project_name = "aws-ecs-cluster-fargate"
+project_name = "aws-ecs-cluster"
 
 region = "us-east-1"
 
