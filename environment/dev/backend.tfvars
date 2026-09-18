@@ -1,3 +1,3 @@
 bucket = "aws-containers-statefiles"
-key    = "ecs/dev/state"
+key    = "ecs-fargate/dev/state"
 region = "us-east-1"
