@@ -1,3 +1,22 @@
+
+
+## Architecture decisions
+
+### Why Fargate and not EC2 here
+There is no ASG and no launch template in this stack — `ecs.tf` creates the cluster (Container Insights enabled) and a capacity provider set, and nothing else provisions compute. The EC2 path is visibly *not* taken: `templates/user-data.tpl` and the `nodes_ami` / `node_instance_type` / `node_volume_*` / `cluster_on_demand_*` / `cluster_spot_*` variables are still declared, and `environment/dev/terraform.tfvars` still assigns them (a pinned AMI, `c5.large`, 50 GiB gp3), but no resource consumes any of it. I rejected EC2 capacity providers because the cost is permanent: AMI patching, ECS agent upgrades, managed termination protection and instance draining on scale-in, plus paying for idle headroom so a deploy has somewhere to land.
+
+### FARGATE_SPOT is allowed on the cluster but kept out of the default strategy
+`capacity_providers` defaults to `["FARGATE", "FARGATE_SPOT"]`, but `default_capacity_provider_strategy` pins `base = 1`, `weight = 100` on `FARGATE` alone. Spot is available, never inherited. I rejected weighting spot in the cluster default because every service that ships without its own strategy would silently accept two-minute reclamation notices — including the ones I never intended to make interruptible.
+
+### An NLB in front of the internal ALB, not one NLB per service
+`aws_api_gateway_vpc_link` is the REST-API VPC Link, which accepts only NLB ARNs. Instead of putting services behind NLBs to satisfy that, I stood up one internal NLB (`vpc_link.tf`) and registered the internal ALB in an `alb`-type target group behind it. Rejecting this means one NLB per exposed service: an hourly bill each, and L4 only, so host/path routing disappears and every routing change moves into API Gateway.
+
+### Three DNS planes instead of one shared namespace
+Cloud Map (`<project>.discovery.com`), Service Connect (`<project>.local`) and a Route53 private zone `<project>.internal.com`, whose `*` record aliases the internal ALB, are separate on purpose. Collapsing Cloud Map and Service Connect into one namespace is the tempting shortcut; the cost is that a half-finished migration leaves two resolution paths answering the same hostname, and Cloud Map will not let you delete a namespace that still has services registered.
+
+### The cluster publishes a contract to SSM, not to its state file
+Both load balancer and listener ARNs, both discovery namespace IDs, the Service Connect name and the VPC Link ID are written to flat `/aws/ecs/*` parameters, and the ingress listener's default action is a fixed `200` rather than a target group. Service stacks read those parameters and attach their own rules. `terraform_remote_state` was the alternative: it would grant every service stack read access to this entire state file and make each deploy a cross-stack refresh. Two costs I accepted: the flat parameter paths allow exactly one cluster per account/region, and an unmatched request returns `200`, so a naive uptime check on the ALB root passes with zero healthy services.
+
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
